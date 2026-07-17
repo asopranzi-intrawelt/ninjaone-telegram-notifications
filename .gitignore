@@ -1,0 +1,38 @@
+# --- Sistema di progetto portabile: livello privato e ignorato (sezione 6/10) ---
+# Da unire al .gitignore del progetto. Inserire PRIMA di creare _notes/, altrimenti
+# la cartella finisce indicizzata.
+
+# Livello privato e verboso
+_notes/
+
+# Override personali e permessi personali
+CLAUDE.local.md
+.claude/settings.local.json
+
+# Segreti e materiale di credenziale: mai committati. Il template pubblico delle variabili
+# e' .env.example, tracciato; la copia compilata .env resta locale (sezione 6).
+.env
+.env.*
+!.env.example
+*.pem
+*.key
+
+# Estratti temporanei di documenti voluminosi (cartelle scratch e cache di doc-ingest)
+_notes/.tmp-doc-*/
+.tmp-doc-*/
+
+# Documenti Word grezzi (binari). Dichiarare qui le eventuali eccezioni curate, es:
+#   *.docx
+#   !docs/specifica-ufficiale.docx
+*.docx
+
+# Ambiente materializzato (sezione 13): si versiona il manifesto, si ignora il derivato.
+# Python
+.venv/
+__pycache__/
+*.pyc
+# Node
+node_modules/
+
+# Stato runtime del relay: UID degli alert gia' notificati, locale alla macchina che lo esegue.
+data/
