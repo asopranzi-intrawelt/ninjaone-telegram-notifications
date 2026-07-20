@@ -21,7 +21,7 @@ ALERT_1 = {
     "priority": "HIGH",
     "conditionName": "Low disk space",
     "sourceType": "CONDITION_AGENT_DISK_FREE_SPACE",
-    "device": {"displayName": "WKS-<b>TEST</b>"},
+    "device": {"displayName": "WKS-<b>TEST</b>", "organizationId": 1},
 }
 ALERT_2 = {
     "uid": "alert-uid-2",
@@ -32,7 +32,7 @@ ALERT_2 = {
     "priority": None,
     "conditionName": None,
     "sourceType": "CONDITION_PING",
-    "device": {},
+    "device": {"organizationId": 1},
 }
 
 
@@ -78,8 +78,11 @@ class RelayEndToEndTest(unittest.TestCase):
         resp.json.return_value = self.alerts
         return resp
 
-    def _run(self, min_severities=None):
-        run_once(self.ninjaone, self.telegram, self.state, [111, 222], min_severities or [])
+    def _run(self, min_severities=None, organization_ids=None):
+        run_once(
+            self.ninjaone, self.telegram, self.state, [111, 222],
+            min_severities or [], organization_ids or [],
+        )
 
     def test_new_alerts_are_notified_and_html_escaped(self):
         self._run()
@@ -127,6 +130,26 @@ class RelayEndToEndTest(unittest.TestCase):
         self.alerts = [{**ALERT_1, "severity": "CRITICAL"}]
         self._run(min_severities=["CRITICAL", "MAJOR"])
         self.assertEqual(len(self.sent_messages), 1)
+
+    def test_organization_filter_blocks_other_organizations(self):
+        self.alerts = [{**ALERT_1, "device": {**ALERT_1["device"], "organizationId": 99}}]
+        self._run(organization_ids=[1])
+        self.assertEqual(len(self.sent_messages), 0)
+
+    def test_organization_filter_allows_matching_organization(self):
+        self._run(organization_ids=[1])
+        self.assertEqual(len(self.sent_messages), 2)
+
+    def test_organization_filter_excludes_alert_from_pruned_state(self):
+        self.alerts = [
+            dict(ALERT_1),
+            {**ALERT_2, "device": {**ALERT_2["device"], "organizationId": 99}},
+        ]
+        self._run(organization_ids=[1])
+        self.assertEqual(len(self.sent_messages), 1)
+        with open(self.state_path) as f:
+            seen = set(json.load(f))
+        self.assertEqual(seen, {make_key("alert-uid-1", "MODERATE")})
 
     def test_escalation_of_same_alert_is_notified_once_it_qualifies(self):
         # Primo giro: severity MODERATE, sotto soglia -> nessuna notifica, nessun mark_seen.

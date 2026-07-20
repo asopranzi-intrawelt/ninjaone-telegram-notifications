@@ -65,6 +65,7 @@ class Config:
     poll_interval_seconds: int = 120
     state_file_path: str = "./data/seen_alerts.json"
     min_severities: list[str] = field(default_factory=list)
+    organization_ids: list[int] = field(default_factory=list)
 
     @classmethod
     def from_env(cls) -> "Config":
@@ -83,6 +84,7 @@ class Config:
         thread_id_raw = os.environ.get("TELEGRAM_MESSAGE_THREAD_ID", "").strip()
         mention_ids_raw = os.environ.get("TELEGRAM_MENTION_USER_IDS", "").strip()
         min_severities_raw = os.environ.get("NINJAONE_MIN_SEVERITIES", "").strip()
+        organization_ids_raw = os.environ.get("NINJAONE_ORGANIZATION_IDS", "").strip()
 
         return cls(
             ninjaone_instance=instance,
@@ -100,5 +102,8 @@ class Config:
             state_file_path=os.environ.get("STATE_FILE_PATH", "./data/seen_alerts.json"),
             min_severities=[
                 s.strip().upper() for s in min_severities_raw.split(",") if s.strip()
+            ],
+            organization_ids=[
+                int(oid) for oid in organization_ids_raw.split(",") if oid.strip()
             ],
         )

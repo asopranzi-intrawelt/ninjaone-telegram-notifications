@@ -20,14 +20,25 @@ def _passes_severity_filter(alert: dict, min_severities: list[str]) -> bool:
     return (alert.get("severity") or "").upper() in min_severities
 
 
+def _belongs_to_organizations(alert: dict, organization_ids: list[int]) -> bool:
+    if not organization_ids:
+        return True
+    device = alert.get("device") or {}
+    return device.get("organizationId") in organization_ids
+
+
 def run_once(
     ninjaone: NinjaOneClient,
     telegram: TelegramClient,
     state: SeenAlertsStore,
     mention_user_ids: list[int],
     min_severities: list[str],
+    organization_ids: list[int],
 ) -> None:
-    alerts = ninjaone.get_active_alerts()
+    alerts = [
+        alert for alert in ninjaone.get_active_alerts()
+        if _belongs_to_organizations(alert, organization_ids)
+    ]
     current_uids = {alert["uid"] for alert in alerts}
 
     candidates = [alert for alert in alerts if state.is_new(make_key(alert["uid"], alert.get("severity")))]
@@ -69,14 +80,23 @@ def main() -> None:
     )
     state = SeenAlertsStore(config.state_file_path)
 
+    if not config.organization_ids:
+        logger.warning(
+            "NINJAONE_ORGANIZATION_IDS non impostato: verranno inoltrati gli alert di "
+            "TUTTE le organizzazioni visibili da questa app API, non solo quella prevista"
+        )
     logger.info(
-        "Relay avviato: istanza NinjaOne=%s, polling ogni %ss, filtro severity=%s",
+        "Relay avviato: istanza NinjaOne=%s, polling ogni %ss, filtro severity=%s, filtro organizzazioni=%s",
         config.ninjaone_instance, config.poll_interval_seconds,
         config.min_severities or "nessuno (tutte le severity)",
+        config.organization_ids or "nessuno (tutte le organizzazioni)",
     )
     while True:
         try:
-            run_once(ninjaone, telegram, state, config.telegram_mention_user_ids, config.min_severities)
+            run_once(
+                ninjaone, telegram, state,
+                config.telegram_mention_user_ids, config.min_severities, config.organization_ids,
+            )
         except Exception:
             logger.exception("Errore durante il ciclo di polling, riprovo al prossimo giro")
         time.sleep(config.poll_interval_seconds)
