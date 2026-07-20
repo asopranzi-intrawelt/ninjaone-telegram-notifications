@@ -95,10 +95,6 @@ Stato del provisioning, aggiornato man mano che i passi si completano:
 | App API NinjaOne | `NINJAONE_CLIENT_ID` / `NINJAONE_CLIENT_SECRET` | da fare |
 | Regione istanza NinjaOne | `NINJAONE_INSTANCE` | da fare |
 | Filtro severity | `NINJAONE_MIN_SEVERITIES` | in attesa di calibrazione: lasciato vuoto finche' non si osservano i valori reali nei log (vedi ADR-003) |
+| Filtro organizzazione | `NINJAONE_ORGANIZATION_IDS` | da fare: serve l'id numerico dell'organizzazione Intrawelt, recuperabile con una chiamata a `GET /v2/organizations` sull'istanza |
 
-Filtro per organizzazione: non necessario, confermato dall'utente. L'istanza NinjaOne
-(`puntoinformatica.rmmservice.eu`) e' gestita dall'MSP esterno Punto Informatica (Via Andrea
-Costa, Porto San Giorgio), che segue Intrawelt tramite Daniele Colò; l'accesso di Alessio
-Sopranzi a quella console e' pero' scoped alla sola organizzazione Intrawelt (nessun'altra
-organizzazione/cliente visibile), quindi ogni alert attivo e' gia' di Intrawelt per definizione,
-senza bisogno di un filtro su `organizationId` o sul parametro `df`.
+Filtro per organizzazione: necessario, a differenza di quanto assunto in precedenza. L'istanza NinjaOne (`puntoinformatica.rmmservice.eu`) e' gestita dall'MSP esterno Punto Informatica (Via Andrea Costa, Porto San Giorgio), che segue Intrawelt tramite Daniele Colò; l'assunzione iniziale era che, essendo l'accesso di Alessio Sopranzi alla console scoped alla sola organizzazione Intrawelt, ogni alert attivo fosse gia' di Intrawelt per definizione. In produzione si e' osservato che l'app API OAuth2 usata dal relay non eredita lo scoping della singola login utente in console: i permessi di un'app client-credentials sono un asse indipendente e su questa istanza vedono tutte le organizzazioni gestite da Punto Informatica, non la sola Intrawelt. Il relay applica quindi un filtro esplicito lato codice sul campo `organizationId` dell'oggetto `device` annidato in ogni Alert (`relay/main.py:_belongs_to_organizations`), verificato contro lo schema ufficiale NinjaOne v2/alerts, popolato dalla lista di ID in `NINJAONE_ORGANIZATION_IDS`; se la variabile e' vuota il relay logga un avviso e non filtra nulla, comportamento identico al bug osservato.
