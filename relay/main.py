@@ -1,4 +1,5 @@
 import logging
+import sys
 import time
 
 from relay.config import Config, ConfigError, load_dotenv
@@ -20,11 +21,53 @@ def _passes_severity_filter(alert: dict, min_severities: list[str]) -> bool:
     return (alert.get("severity") or "").upper() in min_severities
 
 
-def _belongs_to_organizations(alert: dict, organization_ids: list[int]) -> bool:
+def _filter_by_organization(
+    alerts: list[dict], organization_ids: list[int], device_organizations: dict[int, int | None]
+) -> tuple[list[dict], list[dict], list[dict]]:
+    """Divide gli alert in ammessi, di altre organizzazioni e non risolvibili.
+
+    L'organizzazione di un alert non sta nel payload dell'alert: si ricava dal `deviceId`
+    attraverso l'indice dei device. Un alert il cui device non compare nell'indice non viene
+    ammesso, perche' ammetterlo significherebbe inoltrare in chat l'alert di un cliente
+    diverso; il chiamante lo segnala pero' come anomalia, cosi' lo scarto non resta silenzioso."""
+    kept: list[dict] = []
+    foreign: list[dict] = []
+    unresolved: list[dict] = []
+    for alert in alerts:
+        device_id = alert.get("deviceId")
+        if device_id not in device_organizations:
+            unresolved.append(alert)
+        elif device_organizations[device_id] in organization_ids:
+            kept.append(alert)
+        else:
+            foreign.append(alert)
+    return kept, foreign, unresolved
+
+
+def _select_alerts(
+    ninjaone: NinjaOneClient, organization_ids: list[int]
+) -> list[dict]:
+    alerts = ninjaone.get_active_alerts(organization_ids)
     if not organization_ids:
-        return True
-    device = alert.get("device") or {}
-    return device.get("organizationId") in organization_ids
+        return alerts
+
+    device_organizations = ninjaone.get_device_organizations()
+    if any(alert.get("deviceId") not in device_organizations for alert in alerts):
+        # Device aggiunto a NinjaOne dopo l'ultimo aggiornamento dell'indice: si rilegge
+        # l'anagrafica una volta prima di concludere che l'alert non e' risolvibile.
+        device_organizations = ninjaone.get_device_organizations(force_refresh=True)
+
+    kept, foreign, unresolved = _filter_by_organization(
+        alerts, organization_ids, device_organizations
+    )
+    if foreign:
+        logger.info("%s alert scartati perche' di altre organizzazioni", len(foreign))
+    if unresolved:
+        logger.warning(
+            "%s alert scartati: deviceId non presente nell'indice dei device (%s)",
+            len(unresolved), sorted({alert.get("deviceId") for alert in unresolved}),
+        )
+    return kept
 
 
 def run_once(
@@ -34,11 +77,9 @@ def run_once(
     mention_user_ids: list[int],
     min_severities: list[str],
     organization_ids: list[int],
+    notify: bool = True,
 ) -> None:
-    alerts = [
-        alert for alert in ninjaone.get_active_alerts()
-        if _belongs_to_organizations(alert, organization_ids)
-    ]
+    alerts = _select_alerts(ninjaone, organization_ids)
     current_uids = {alert["uid"] for alert in alerts}
 
     candidates = [alert for alert in alerts if state.is_new(make_key(alert["uid"], alert.get("severity")))]
@@ -49,12 +90,18 @@ def run_once(
             len(candidates), len(alerts), severities_seen,
         )
 
+    primed = 0
     for alert in candidates:
         if not _passes_severity_filter(alert, min_severities):
             continue
-        text = format_alert_message(alert, mention_user_ids)
-        telegram.send_message(text)
+        if notify:
+            telegram.send_message(format_alert_message(alert, mention_user_ids))
+        else:
+            primed += 1
         state.mark_seen(make_key(alert["uid"], alert.get("severity")))
+
+    if primed:
+        logger.info("%s alert arretrati segnati come gia' visti senza notificarli", primed)
 
     state.prune_to(current_uids)
 
@@ -85,6 +132,19 @@ def main() -> None:
             "NINJAONE_ORGANIZATION_IDS non impostato: verranno inoltrati gli alert di "
             "TUTTE le organizzazioni visibili da questa app API, non solo quella prevista"
         )
+
+    if "--prime" in sys.argv[1:]:
+        # Avvio a freddo dopo un periodo di silenzio: gli alert gia' attivi verrebbero
+        # notificati tutti insieme. Con --prime si esegue un solo giro che li registra come
+        # gia' visti senza inviare nulla, cosi' in chat arrivano solo gli alert successivi.
+        logger.info("Modalita' --prime: un solo giro, nessun messaggio inviato")
+        run_once(
+            ninjaone, telegram, state,
+            config.telegram_mention_user_ids, config.min_severities, config.organization_ids,
+            notify=False,
+        )
+        return
+
     logger.info(
         "Relay avviato: istanza NinjaOne=%s, polling ogni %ss, filtro severity=%s, filtro organizzazioni=%s",
         config.ninjaone_instance, config.poll_interval_seconds,

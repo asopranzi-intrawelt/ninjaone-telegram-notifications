@@ -5,23 +5,25 @@ import unittest
 from unittest.mock import MagicMock, patch
 
 from relay.config import Config, ConfigError, load_dotenv
-from relay.ninjaone_client import NinjaOneClient
+from relay.ninjaone_client import NinjaOneClient, device_filter_expression
 from relay.telegram_client import TelegramClient
 from relay.state import SeenAlertsStore, make_key
 from relay.main import run_once
 
 TOKEN_RESPONSE = {"access_token": "fake-token", "expires_in": 3600, "token_type": "bearer"}
 
+# Le fixture riproducono lo schema realmente restituito da /v2/alerts sull'istanza in uso:
+# l'alert porta solo `deviceId`, non un oggetto `device` annidato, quindi l'organizzazione
+# non e' deducibile dal solo alert e va risolta con l'anagrafica dei device.
 ALERT_1 = {
     "uid": "alert-uid-1",
     "deviceId": 42,
-    "message": "Disk free space < 10%",
+    "message": "Disk free space < 10% su <b>C:</b>",
     "createTime": 1752000000,
     "severity": "MODERATE",
     "priority": "HIGH",
     "conditionName": "Low disk space",
     "sourceType": "CONDITION_AGENT_DISK_FREE_SPACE",
-    "device": {"displayName": "WKS-<b>TEST</b>", "organizationId": 1},
 }
 ALERT_2 = {
     "uid": "alert-uid-2",
@@ -32,14 +34,22 @@ ALERT_2 = {
     "priority": None,
     "conditionName": None,
     "sourceType": "CONDITION_PING",
-    "device": {"organizationId": 1},
 }
+DEVICES = [
+    {"id": 42, "organizationId": 1, "systemName": "WKS-TEST"},
+    {"id": 7, "organizationId": 1, "systemName": "SRV-TEST"},
+]
 
 
 class RelayEndToEndTest(unittest.TestCase):
     def setUp(self):
         self.sent_messages = []
         self.alerts = [dict(ALERT_1), dict(ALERT_2)]
+        # Risposte successive di /v2/devices: l'ultima resta valida per le chiamate seguenti,
+        # cosi' un test puo' simulare un'anagrafica che si aggiorna tra un giro e l'altro.
+        self.device_responses = [list(DEVICES)]
+        self.device_calls = 0
+        self.alert_query_params = []
         self.tmpdir = tempfile.TemporaryDirectory()
         self.addCleanup(self.tmpdir.cleanup)
         self.state_path = os.path.join(self.tmpdir.name, "seen.json")
@@ -70,25 +80,33 @@ class RelayEndToEndTest(unittest.TestCase):
             return resp
         raise AssertionError(f"unexpected POST {url}")
 
-    def _fake_get(self, url, headers=None, timeout=None):
+    def _fake_get(self, url, headers=None, params=None, timeout=None):
         self.assertEqual(headers["Authorization"], "Bearer fake-token")
         resp = MagicMock()
         resp.status_code = 200
         resp.raise_for_status = MagicMock()
-        resp.json.return_value = self.alerts
+        if url.endswith("/v2/devices"):
+            self.device_calls += 1
+            index = min(self.device_calls - 1, len(self.device_responses) - 1)
+            resp.json.return_value = self.device_responses[index]
+        elif url.endswith("/v2/alerts"):
+            self.alert_query_params.append(params)
+            resp.json.return_value = self.alerts
+        else:
+            raise AssertionError(f"unexpected GET {url}")
         return resp
 
-    def _run(self, min_severities=None, organization_ids=None):
+    def _run(self, min_severities=None, organization_ids=None, notify=True):
         run_once(
             self.ninjaone, self.telegram, self.state, [111, 222],
-            min_severities or [], organization_ids or [],
+            min_severities or [], organization_ids or [], notify=notify,
         )
 
     def test_new_alerts_are_notified_and_html_escaped(self):
         self._run()
         self.assertEqual(len(self.sent_messages), 2)
         self.assertIn("Disk free space", self.sent_messages[0]["text"])
-        self.assertIn("WKS-&lt;b&gt;TEST&lt;/b&gt;", self.sent_messages[0]["text"])
+        self.assertIn("&lt; 10% su &lt;b&gt;C:&lt;/b&gt;", self.sent_messages[0]["text"])
         self.assertIn("tg://user?id=111", self.sent_messages[0]["text"])
         self.assertIn("tg://user?id=222", self.sent_messages[0]["text"])
 
@@ -132,7 +150,8 @@ class RelayEndToEndTest(unittest.TestCase):
         self.assertEqual(len(self.sent_messages), 1)
 
     def test_organization_filter_blocks_other_organizations(self):
-        self.alerts = [{**ALERT_1, "device": {**ALERT_1["device"], "organizationId": 99}}]
+        self.device_responses = [[{**DEVICES[0], "organizationId": 99}, DEVICES[1]]]
+        self.alerts = [dict(ALERT_1)]
         self._run(organization_ids=[1])
         self.assertEqual(len(self.sent_messages), 0)
 
@@ -140,16 +159,51 @@ class RelayEndToEndTest(unittest.TestCase):
         self._run(organization_ids=[1])
         self.assertEqual(len(self.sent_messages), 2)
 
+    def test_organization_filter_is_also_requested_to_the_server(self):
+        self._run(organization_ids=[1])
+        self.assertEqual(self.alert_query_params, [{"df": "org=1"}])
+
+    def test_alerts_are_not_filtered_when_no_organization_is_configured(self):
+        self._run()
+        self.assertEqual(self.alert_query_params, [None])
+        self.assertEqual(self.device_calls, 0)
+        self.assertEqual(len(self.sent_messages), 2)
+
+    def test_alert_of_unknown_device_is_dropped_not_forwarded(self):
+        # Device assente dall'anagrafica anche dopo il refresh: l'organizzazione resta
+        # ignota e l'alert non deve finire in chat.
+        self.device_responses = [[DEVICES[0]]]
+        self._run(organization_ids=[1])
+        self.assertEqual(len(self.sent_messages), 1)
+        self.assertIn("Disk free space", self.sent_messages[0]["text"])
+
+    def test_device_index_is_refreshed_when_a_new_device_appears(self):
+        # Primo giro con anagrafica incompleta, secondo giro con il device aggiunto.
+        self.device_responses = [[DEVICES[0]], list(DEVICES)]
+        self._run(organization_ids=[1])
+        self.assertEqual(self.device_calls, 2)
+        self.assertEqual(len(self.sent_messages), 2)
+
     def test_organization_filter_excludes_alert_from_pruned_state(self):
-        self.alerts = [
-            dict(ALERT_1),
-            {**ALERT_2, "device": {**ALERT_2["device"], "organizationId": 99}},
-        ]
+        self.device_responses = [[DEVICES[0], {**DEVICES[1], "organizationId": 99}]]
         self._run(organization_ids=[1])
         self.assertEqual(len(self.sent_messages), 1)
         with open(self.state_path) as f:
             seen = set(json.load(f))
         self.assertEqual(seen, {make_key("alert-uid-1", "MODERATE")})
+
+    def test_prime_marks_alerts_as_seen_without_sending_them(self):
+        self._run(notify=False)
+        self.assertEqual(len(self.sent_messages), 0)
+        with open(self.state_path) as f:
+            seen = set(json.load(f))
+        self.assertEqual(
+            seen,
+            {make_key("alert-uid-1", "MODERATE"), make_key("alert-uid-2", None)},
+        )
+        # Il giro successivo, questa volta notificante, non deve recuperare l'arretrato.
+        self._run()
+        self.assertEqual(len(self.sent_messages), 0)
 
     def test_escalation_of_same_alert_is_notified_once_it_qualifies(self):
         # Primo giro: severity MODERATE, sotto soglia -> nessuna notifica, nessun mark_seen.
@@ -166,6 +220,21 @@ class RelayEndToEndTest(unittest.TestCase):
         self.sent_messages.clear()
         self._run(min_severities=["CRITICAL"])
         self.assertEqual(len(self.sent_messages), 0)
+
+
+class DeviceFilterExpressionTest(unittest.TestCase):
+    """Sintassi del device filter `df`, verificata sull'istanza NinjaOne reale: la forma a
+    lista separata da virgole dopo l'uguale viene rifiutata con InvalidFilterException, per
+    piu' organizzazioni si usa `org in (...)`."""
+
+    def test_no_organization_means_no_filter(self):
+        self.assertIsNone(device_filter_expression([]))
+
+    def test_single_organization_uses_equality(self):
+        self.assertEqual(device_filter_expression([29]), "org=29")
+
+    def test_multiple_organizations_use_the_in_form(self):
+        self.assertEqual(device_filter_expression([29, 14]), "org in (29,14)")
 
 
 BASE_ENV = {
