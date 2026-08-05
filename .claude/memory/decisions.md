@@ -69,3 +69,46 @@ Conseguenze: finche' il filtro resta vuoto, il gruppo riceve tutti gli alert att
 calibrazione e' un passo manuale successivo, tracciato in `context/deployment.md` e
 `context/current-work.md`. La mappa emoji per severity sconosciute usa un simbolo neutro
 (bianco) invece di un colore a caso, cosi' un valore non mappato si nota subito in chat.
+
+## ADR-004 — L'organizzazione si risolve dal deviceId, filtro doppio e fail-closed
+
+Data: 2026-08-05
+Stato: accettata. Supera la premessa di ADR-003 secondo cui l'istanza sarebbe single-tenant e
+nessun filtro per organizzazione sarebbe necessario, e corregge l'implementazione del filtro
+introdotta il 2026-07-20 nei commit `2804a06` e `6e0bd8e`.
+Contesto: l'istanza NinjaOne e' gestita da un MSP esterno e l'app API a client credentials vede
+tutte le organizzazioni gestite dall'MSP, non la sola Intrawelt: i permessi di un'app
+machine-to-machine sono un asse indipendente dallo scoping della login utente in console. Il
+filtro introdotto il 20 luglio leggeva l'organizzazione da `alert["device"]["organizationId"]`,
+assumendo un oggetto `device` annidato nell'Alert. Quell'oggetto non esiste nel payload reale di
+`GET /v2/alerts`, che porta solo `deviceId`, quindi il confronto era sempre falso e ogni alert
+veniva scartato: il gruppo Telegram e' rimasto muto dal 20 luglio al 5 agosto, con il processo
+vivo e il token rinnovato regolarmente, senza una sola riga di log che segnalasse lo scarto. La
+suite di test era verde perche' le fixture contenevano l'oggetto `device` inventato, mai osservato
+sull'istanza.
+Decisione: risolvere l'organizzazione di un alert attraverso l'anagrafica dei device. Il client
+espone `get_device_organizations()`, che legge `GET /v2/devices` e costruisce la mappa
+`deviceId -> organizationId` con cache di 900 secondi e rilettura forzata quando compare un
+`deviceId` ignoto. Il filtro viene inoltre chiesto al server con il device filter `df` su
+`/v2/alerts`, la cui sintassi e' `org=<id>` per una sola organizzazione e `org in (<id>,<id>)` per
+piu' di una, mentre `org=<id>,<id>` viene rifiutata con `InvalidFilterException`. Il controllo
+lato client resta quello autoritativo, e in caso di device non attribuibile scarta l'alert
+(fail-closed) registrando un WARNING con i `deviceId` coinvolti; gli alert di altre organizzazioni
+si contano a livello INFO. Le fixture dei test sono state riscritte sul payload reale e il flag
+`--prime` esegue un giro silenzioso che assorbe l'arretrato senza inviare messaggi.
+Motivazione: il doppio filtro copre due modi di sbagliare opposti. Il solo filtro server-side
+sarebbe fail-open, perche' un `df` ignorato da una versione futura dell'API farebbe uscire nel
+gruppo gli alert degli altri clienti dell'MSP, che e' un problema di riservatezza e non di rumore;
+il solo filtro client-side e' fail-closed ed e' esattamente il modo in cui il bug e' passato
+inosservato, quindi ogni scarto deve lasciare traccia nei log. La cache sull'anagrafica evita una
+chiamata in piu' a ogni giro di polling senza rendere il relay cieco ai device nuovi, e il
+priming evita che il ripristino del filtro si presenti come una raffica di decine di messaggi.
+Conseguenze: il relay effettua due chiamate API invece di una, la seconda solo alla scadenza
+della cache o all'apparire di un device ignoto. Un campo usato per una decisione di filtro va
+osservato una volta sull'istanza reale prima di finire in una fixture: la verifica contro lo spec
+OpenAPI, che descrive lo schema `Alert` in generale, non basta a garantire che un campo sia
+popolato dall'endpoint concreto. Con il filtro funzionante e' stata infine possibile la
+calibrazione lasciata aperta da ADR-003: i valori di `severity` osservati sull'istanza sono i
+cinque dell'enumerazione ufficiale (`NONE`, `MINOR`, `MODERATE`, `MAJOR`, `CRITICAL`) e
+`NINJAONE_MIN_SEVERITIES` e' stato impostato su `CRITICAL,MAJOR`, tenendo presente che il
+confronto e' per uguaglianza esatta e non per soglia, nonostante il nome della variabile.

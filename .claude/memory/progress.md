@@ -6,9 +6,58 @@
 > documenti `.docx`, con il nome del documento sorgente e l'esito, così la data di allineamento
 > sopravvive a un clone.
 
+## 2026-08-05 — Ancoraggio dei PENDING-FIRST-COMMIT e riconciliazione delle schede
+
+Commit: ac34b7b
+File toccati: `context/STACK.md`, `context/design-and-security.md`, `context/deployment.md`,
+`context/dev-testing.md`, `context/current-work.md`, `context/roadmap.md`, `memory/index.md`,
+`memory/decisions.md` (ADR-004).
+Motivo: tutte le schede portavano ancora il segnaposto `PENDING-FIRST-COMMIT`, creato in
+greenfield prima che il repository avesse un commit. Il segnaposto e' stato ancorato a `91c9917`,
+il primo commit, che e' quello che materializza lo stato descritto dalle schede, e non
+direttamente a HEAD: ancorare a HEAD avrebbe dichiarato verificato anche cio' che i commit del
+filtro per organizzazione hanno cambiato, mascherando il drift da correggere. Sul delta
+`91c9917..HEAD` risultavano stale cinque schede su sei, aggiornate con edit chirurgici sulle sole
+sezioni impattate, e `last-verified-commit` portato a `ac34b7b`. Due correzioni riguardano drift
+anteriore al primo commit, che il confronto fra commit non puo' mostrare: il loader `.env` nativo
+e il supporto agli URL brandizzati in `STACK.md`, e l'avvio automatico in `deployment.md`, che era
+descritto come non ancora configurato mentre e' in esercizio dal 17 luglio. `roadmap.md` e' stata
+ancorata ma resta a contenuto segnaposto. Anche le cinque voci storiche di questo work-log, che
+riportavano `Commit: PENDING-FIRST-COMMIT`, sono state ancorate a `91c9917`, il commit in cui quel
+lavoro e' effettivamente entrato: e' la risoluzione di un segnaposto, non la riscrittura di una
+voce. La sezione di `deployment.md` che descriveva il filtro
+come basato sul campo `organizationId` di un oggetto `device` annidato nell'Alert e' stata
+riscritta, perche' quel campo non esiste ed era la fonte documentale dell'errore.
+
+## 2026-08-05 — Ripristinato il filtro per organizzazione, calibrata la severity
+
+Commit: ac34b7b
+File toccati: `relay/ninjaone_client.py` (helper `_get` con retry su 401, `get_active_alerts` con
+device filter `df`, `get_device_organizations` con cache a 900 secondi,
+`device_filter_expression`), `relay/main.py` (`_select_alerts`, `_filter_by_organization`, logging
+degli scarti, flag `--prime`), `tests/test_relay.py` (fixture riscritte sul payload reale, da 12 a
+23 test), `.env.example` (`NINJAONE_ORGANIZATION_IDS`), `.env` (filtro severity su
+`CRITICAL,MAJOR`, modificato dall'utente).
+Motivo: il gruppo Telegram era muto dal 20 luglio. Il filtro per organizzazione introdotto quel
+giorno leggeva `alert["device"]["organizationId"]`, campo inesistente nel payload reale di
+`GET /v2/alerts`, che porta solo `deviceId`: ogni alert veniva scartato in silenzio, con il
+processo vivo, il token rinnovato ogni ora e `data/seen_alerts.json` rimasto lista vuota. Le
+fixture dei test contenevano l'oggetto `device` inventato, quindi la suite era verde. Diagnosi
+condotta sull'API reale in sola lettura, correzione descritta in ADR-004, verifica con 23 test
+verdi piu' un dry run reale che seleziona 46 alert su 77 attivi, tutti dell'organizzazione
+attesa, e un messaggio di test consegnato nel gruppo su autorizzazione dell'utente. Sono emersi
+due fatti operativi: `Stop-ScheduledTask` non termina il processo Python staccato da `cmd`, quindi
+il primo riavvio aveva lasciato in esecuzione il codice vecchio, e ogni modifica a `.env` richiede
+un riavvio perche' la configurazione si legge solo all'avvio. Entrambi documentati in
+`context/deployment.md`. Relay riavviato alle 15:47 con `filtro severity=['CRITICAL', 'MAJOR']` e
+filtro per organizzazione attivo.
+Resta da fare: risoluzione del nome del device nei messaggi (oggi `device #<id>`), troncamento dei
+messaggi da event log Windows e Veeam, ed eventuale spostamento su VM Proxmox per la copertura
+24/7.
+
 ## 2026-07-16 — Secondo utente da menzionare recuperato
 
-Commit: PENDING-FIRST-COMMIT
+Commit: 91c9917
 File toccati: `.env`, `context/deployment.md`, `context/current-work.md`.
 Motivo: Daniele Colò (@danielecolo) ha scritto nel gruppo `tech_intrawelt`, ID Telegram
 `29491021` letto via `getUpdates` con lo stesso meccanismo usato per Alessio Sopranzi.
@@ -18,7 +67,7 @@ severity sui valori reali.
 
 ## 2026-07-16 — Provisioning Telegram completato, filtro di severity e formato compatto (ADR-003)
 
-Commit: PENDING-FIRST-COMMIT
+Commit: 91c9917
 File toccati: `relay/formatting.py` (formato a due righe con emoji di severity, niente priorita'
 ne' timestamp esplicito), `relay/config.py` (nuovo campo `min_severities`), `relay/main.py`
 (filtro `_passes_severity_filter`, log delle severity osservate per calibrazione), `relay/state.py`
@@ -40,7 +89,7 @@ calibrazione del filtro di severity, verifica end-to-end contro le API reali.
 
 ## 2026-07-16 — Tracciata la guida di provisioning e la bibliografia delle fonti
 
-Commit: PENDING-FIRST-COMMIT
+Commit: 91c9917
 File toccati: `context/deployment.md` (nuova sezione "Provisioning delle credenziali" con il
 runbook passo-passo per bot Telegram, chat ID, topic, ID utenti, app API NinjaOne, e una tabella
 di stato per credenziale), `README.md` (sezione Riferimenti espansa in bibliografia completa,
@@ -53,7 +102,7 @@ Telegram in fase di creazione (Step 1 della guida), le altre credenziali ancora 
 
 ## 2026-07-16 — Prima implementazione del relay NinjaOne -> Telegram
 
-Commit: PENDING-FIRST-COMMIT
+Commit: 91c9917
 File toccati: `relay/` (config, ninjaone_client, telegram_client, state, formatting, main),
 `tests/test_relay.py`, `requirements.txt`, `.env.example`, `.gitignore` (aggiunta `data/`),
 `README.md`, schede `context/STACK.md`, `design-and-security.md`, `deployment.md`,
@@ -69,7 +118,7 @@ menzionare).
 
 ## 2026-07-16 — Inizializzazione del sistema di progetto
 
-Commit: PENDING-FIRST-COMMIT
+Commit: 91c9917
 File toccati: anatomia di `.claude`, `CLAUDE.md`, `.gitignore`, schede di `context/`, identità git
 locale (alias `github-corp`), remote `origin` verso `asopranzi-intrawelt/ninjaone-telegram-notifications`
 (repository pubblico).

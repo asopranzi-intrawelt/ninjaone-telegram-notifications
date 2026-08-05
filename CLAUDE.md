@@ -57,6 +57,12 @@ Regole modulari caricate su necessità, sotto `.claude/rules/`, e skill richiama
   API; miglior prior art open source: provectio/ninjaone-teamswebhook (Go) e
   redbaron2k7/ninjacord-webhook-translator (PHP), entrambi adattabili sostituendo il target
   Discord/Teams con Telegram Bot API.
+- [2026-08-05] L'oggetto Alert di NinjaOne (GET /v2/alerts) NON contiene un oggetto device
+  annidato: porta solo deviceId, e l'organizzazione va risolta con GET /v2/devices. Il filtro che
+  assumeva alert["device"]["organizationId"] scartava ogni alert in silenzio e ha tenuto muto il
+  gruppo Telegram dal 20 luglio al 5 agosto, con i test verdi perche' le fixture contenevano il
+  campo inventato (ADR-004). Un campo usato per filtrare va osservato una volta sull'istanza reale
+  prima di finire in una fixture: lo spec OpenAPI descrive lo schema, non cosa l'endpoint popola.
 - [2026-07-16] Decisione architetturale presa (ADR-002): relay Python a polling anziche' webhook,
   per evitare esposizione pubblica del PC/VM che lo ospita. Endpoint OAuth2 e schema Alert
   verificati contro lo spec OpenAPI ufficiale NinjaOne (reperito nel repository GitHub
