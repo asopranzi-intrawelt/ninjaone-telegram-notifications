@@ -1,27 +1,18 @@
 # ninjaone-telegram-notifications
 
-Relay che interroga periodicamente (polling) gli alert attivi di NinjaOne RMM[^1] e li inoltra al
-gruppo Telegram `tech_intrawelt`, menzionando due utenti designati.
+Relay che interroga periodicamente (polling) gli alert attivi di NinjaOne RMM[^1] e li inoltra al gruppo Telegram `tech_intrawelt`, menzionando due utenti designati.
 
 ---
 
 ## Stack
 
-Python 3.10+, dipendenza unica `requests`. Nessun server web: un processo long-running che
-interroga l'API[^2] NinjaOne a intervalli regolari, nessun webhook in ingresso e nessuna
-esposizione pubblica necessaria. Vedi `.claude/context/STACK.md` per il dettaglio dei moduli.
+Python 3.10+, dipendenza unica `requests`. Nessun server web: un processo long-running che interroga l'API[^2] NinjaOne a intervalli regolari, nessun webhook in ingresso e nessuna esposizione pubblica necessaria. Vedi `.claude/context/STACK.md` per il dettaglio dei moduli.
 
 ---
 
 ## Come funziona
 
-Il relay si autentica su NinjaOne via OAuth2[^3] client credentials, scope `monitoring` (sola
-lettura), interroga `GET /v2/alerts` ogni `POLL_INTERVAL_SECONDS`, e per ogni alert non ancora
-notificato invia un messaggio HTML[^4] al gruppo Telegram configurato tramite l'API Bot,
-menzionando i due utenti configurati. Lo stato degli alert già notificati è persistito localmente
-per evitare duplicati tra un polling e il successivo. Il procedimento dettagliato per procurarsi
-bot, chat ID e credenziali NinjaOne è tracciato in `.claude/context/deployment.md`, sezione
-"Provisioning delle credenziali".
+Il relay si autentica su NinjaOne via OAuth2[^3] client credentials, scope `monitoring` (sola lettura), interroga `GET /v2/alerts` ogni `POLL_INTERVAL_SECONDS`, e per ogni alert non ancora notificato invia un messaggio HTML[^4] al gruppo Telegram configurato tramite l'API Bot, menzionando i due utenti configurati. Lo stato degli alert già notificati è persistito localmente per evitare duplicati tra un polling e il successivo. Il procedimento dettagliato per procurarsi bot, chat ID e credenziali NinjaOne è tracciato in `.claude/context/deployment.md`, sezione "Provisioning delle credenziali".
 
 ## Setup
 
@@ -54,14 +45,9 @@ python -m unittest discover tests -v
 
 ## Riferimenti
 
-Le fonti sotto sono il risultato di una ricerca dedicata su cosa esiste già per collegare
-NinjaOne a Telegram, condotta prima di scegliere l'architettura (vedi `memory/decisions.md`,
-ADR-002). Sono divise tra le fonti usate come riferimento primario per scrivere il codice, quindi
-verificate direttamente, e le fonti di prior art consultate per la scelta architetturale ma non
-incorporate nel codice.
+Le fonti sotto sono il risultato di una ricerca dedicata su cosa esiste già per collegare NinjaOne a Telegram, condotta prima di scegliere l'architettura (vedi `memory/decisions.md`, ADR-002). Sono divise tra le fonti usate come riferimento primario per scrivere il codice, quindi verificate direttamente, e le fonti di prior art consultate per la scelta architetturale ma non incorporate nel codice.
 
-Fonti primarie, verificate direttamente contro il codice sorgente o lo spec, non assunte dalla
-sola prosa documentale:
+Fonti primarie, verificate direttamente contro il codice sorgente o lo spec, non assunte dalla sola prosa documentale:
 
 - [NinjaOne Public API, reference](https://app.ninjarmm.com/apidocs-beta/): pagina indice dell'API pubblica NinjaOne
 - [ninjaOne-API-core-resources.yaml](https://raw.githubusercontent.com/homotechsual/NinjaOne/main/ninjaOne-API-core-resources.yaml): spec OpenAPI completa, fonte dei path `/v2/alerts` e dello schema `Alert` usati in `relay/ninjaone_client.py`

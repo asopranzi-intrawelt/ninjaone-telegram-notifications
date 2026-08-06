@@ -11,29 +11,15 @@ last-verified-commit: ac34b7b
 
 # Stack applicativo
 
-> Documento di recupero più importante: tracciato, perché un collega che clona deve vederlo.
-> Popolare leggendo il codice attuale, non inventare. Affinare `covers-paths` man mano.
+> Documento di recupero più importante: tracciato, perché un collega che clona deve vederlo. Popolare leggendo il codice attuale, non inventare. Affinare `covers-paths` man mano.
 
 ## Stack e runtime
 
-Python 3.13 (verificato con l'interprete di sviluppo, nessun vincolo di versione minima fissato
-oltre 3.10 per via delle annotazioni `str | None` / `set[str]`). Unica dipendenza esterna:
-`requests` (vedi `requirements.txt`). Nessun framework web: il relay è un processo long-running a
-polling, non un server HTTP. Test con `unittest` di libreria standard, nessuna dipendenza di test
-aggiuntiva.
+Python 3.13 (verificato con l'interprete di sviluppo, nessun vincolo di versione minima fissato oltre 3.10 per via delle annotazioni `str | None` / `set[str]`). Unica dipendenza esterna: `requests` (vedi `requirements.txt`). Nessun framework web: il relay è un processo long-running a polling, non un server HTTP. Test con `unittest` di libreria standard, nessuna dipendenza di test aggiuntiva.
 
 ## Alternative deliberatamente escluse
 
-Modello push (webhook NinjaOne + tunnel pubblico verso il PC/VM locale): scartato per evitare di
-esporre un endpoint su internet per un progetto a due utenti; il modello pull a polling elimina
-il bisogno di un tunnel (Cloudflare Tunnel/ngrok) o di un IP pubblico.
-Piattaforme no-code (n8n, Albato): scartate per mantenere il progetto autonomo, senza un servizio
-di orchestrazione aggiuntivo da gestire.
-Script PowerShell condition-triggered lato NinjaOne: scartato perché distribuirebbe il token del
-bot Telegram sugli endpoint monitorati e coprirebbe solo gli alert di tipo "condizione
-scriptabile", non l'intero flusso di alert.
-`python-telegram-bot` o altre librerie Telegram dedicate: scartate, l'API Telegram usata (solo
-`sendMessage`) è una singola chiamata HTTP POST, `requests` è sufficiente.
+Modello push (webhook NinjaOne + tunnel pubblico verso il PC/VM locale): scartato per evitare di esporre un endpoint su internet per un progetto a due utenti; il modello pull a polling elimina il bisogno di un tunnel (Cloudflare Tunnel/ngrok) o di un IP pubblico. Piattaforme no-code (n8n, Albato): scartate per mantenere il progetto autonomo, senza un servizio di orchestrazione aggiuntivo da gestire. Script PowerShell condition-triggered lato NinjaOne: scartato perché distribuirebbe il token del bot Telegram sugli endpoint monitorati e coprirebbe solo gli alert di tipo "condizione scriptabile", non l'intero flusso di alert. `python-telegram-bot` o altre librerie Telegram dedicate: scartate, l'API Telegram usata (solo `sendMessage`) è una singola chiamata HTTP POST, `requests` è sufficiente.
 
 ## Flussi di codice e ruolo architetturale dei file
 
@@ -76,24 +62,10 @@ tests/test_relay.py        23 test con requests mockato: notifica, escaping HTML
                             priming, sintassi del device filter, Config e loader .env
 ```
 
-Esecuzione: `python -m relay.main` dalla radice del progetto, con un file `.env` (da
-`.env.example`) o le variabili già esportate nell'ambiente. Un solo giro senza invii, per
-assorbire gli alert già attivi dopo un fermo prolungato, si ottiene con
-`python -m relay.main --prime`.
+Esecuzione: `python -m relay.main` dalla radice del progetto, con un file `.env` (da `.env.example`) o le variabili già esportate nell'ambiente. Un solo giro senza invii, per assorbire gli alert già attivi dopo un fermo prolungato, si ottiene con `python -m relay.main --prime`.
 
-L'organizzazione di un alert non e' deducibile dal solo alert: il payload di `GET /v2/alerts`
-porta `deviceId` e non un oggetto `device` annidato, quindi `organizationId` si risolve
-attraverso l'anagrafica dei device. Il filtro viene chiesto due volte, al server con il
-parametro `df` e di nuovo lato client sulla mappa dei device, e in caso di dubbio scarta:
-il dettaglio del perche' sta in ADR-004.
+L'organizzazione di un alert non e' deducibile dal solo alert: il payload di `GET /v2/alerts` porta `deviceId` e non un oggetto `device` annidato, quindi `organizationId` si risolve attraverso l'anagrafica dei device. Il filtro viene chiesto due volte, al server con il parametro `df` e di nuovo lato client sulla mappa dei device, e in caso di dubbio scarta: il dettaglio del perche' sta in ADR-004.
 
 ## Riferimenti a snippet
 
-`relay/ninjaone_client.py:NinjaOneClient._fetch_token` — richiesta OAuth2 client credentials.
-`relay/ninjaone_client.py:NinjaOneClient.get_active_alerts` — lettura alert attivi, con device filter.
-`relay/ninjaone_client.py:NinjaOneClient.get_device_organizations` — mappa deviceId -> organizationId.
-`relay/ninjaone_client.py:device_filter_expression` — sintassi del parametro df.
-`relay/main.py:_select_alerts` — lettura alert e risoluzione dell'organizzazione.
-`relay/main.py:_filter_by_organization` — partizione in ammessi, altrui, non risolvibili.
-`relay/main.py:run_once` — logica di deduplica e invio.
-`relay/formatting.py:format_alert_message` — mappatura campi Alert -> testo Telegram.
+`relay/ninjaone_client.py:NinjaOneClient._fetch_token` — richiesta OAuth2 client credentials. `relay/ninjaone_client.py:NinjaOneClient.get_active_alerts` — lettura alert attivi, con device filter. `relay/ninjaone_client.py:NinjaOneClient.get_device_organizations` — mappa deviceId -> organizationId. `relay/ninjaone_client.py:device_filter_expression` — sintassi del parametro df. `relay/main.py:_select_alerts` — lettura alert e risoluzione dell'organizzazione. `relay/main.py:_filter_by_organization` — partizione in ammessi, altrui, non risolvibili. `relay/main.py:run_once` — logica di deduplica e invio. `relay/formatting.py:format_alert_message` — mappatura campi Alert -> testo Telegram.

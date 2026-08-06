@@ -1,8 +1,6 @@
 # Snapshot di sincronizzazione
 
-> Da leggere per primo a inizio sessione. Fotografa lo stato del progetto al commit di
-> riferimento e mappa ogni scheda al suo stato di verifica. È la fonte di verità su cosa è fatto,
-> non le spunte del diario.
+> Da leggere per primo a inizio sessione. Fotografa lo stato del progetto al commit di riferimento e mappa ogni scheda al suo stato di verifica. È la fonte di verità su cosa è fatto, non le spunte del diario.
 
 ## Stato
 
@@ -25,10 +23,4 @@ Data snapshot:        2026-08-05
 
 ## Punto di ripresa
 
-Relay in esercizio e verificato capo a fondo il 2026-08-05: filtra gli alert della sola
-organizzazione Intrawelt risolvendone l'appartenenza dal `deviceId` (ADR-004) e le sole severity
-`CRITICAL` e `MAJOR`, girando sul PC Windows via attivita' pianificata `NinjaOneTelegramRelay`.
-Nessun lavoro di codice in sospeso. I tre punti aperti, tutti facoltativi, sono elencati in
-`current-work.md`: risolvere il nome del device nei messaggi al posto del ripiego `device #<id>`,
-troncare i messaggi da event log Windows e Veeam, e valutare lo spostamento su VM Proxmox per la
-copertura 24/7. Da popolare, quando serve, il contenuto di `roadmap.md`.
+Relay in esercizio e verificato capo a fondo il 2026-08-05: filtra gli alert della sola organizzazione Intrawelt risolvendone l'appartenenza dal `deviceId` (ADR-004) e le sole severity `CRITICAL` e `MAJOR`, girando sul PC Windows via attivita' pianificata `NinjaOneTelegramRelay`. Nessun lavoro di codice in sospeso. I tre punti aperti, tutti facoltativi, sono elencati in `current-work.md`: risolvere il nome del device nei messaggi al posto del ripiego `device #<id>`, troncare i messaggi da event log Windows e Veeam, e valutare lo spostamento su VM Proxmox per la copertura 24/7. Da popolare, quando serve, il contenuto di `roadmap.md`.

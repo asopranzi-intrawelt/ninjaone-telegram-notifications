@@ -8,8 +8,7 @@ last-verified-commit: ac34b7b
 
 # Roadmap
 
-> Direzione e priorità del progetto. Tracciata. Non è il work-log: qui sta dove si va, non cosa è
-> già stato fatto.
+> Direzione e priorità del progetto. Tracciata. Non è il work-log: qui sta dove si va, non cosa è già stato fatto.
 
 ## Direzione
 
