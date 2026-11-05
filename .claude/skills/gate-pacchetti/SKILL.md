@@ -52,6 +52,10 @@ Ne aggiungo o ne tolgo qualcuno?
 
 Un settore che l'utente aggiunge si attraversa come gli altri. Un settore che l'utente toglie si salta, e l'esclusione si registra con la sua ragione: senza quella riga la tornata successiva riproporrà lo stesso settore alla stessa persona, e un gate che ripete diventa un gate che si impara a scorrere senza leggere.
 
+## Un rifiuto in blocco non copre i pacchetti il cui trigger non dipende dal settore
+
+Il gate si attraversa per settore, ma il trigger di alcuni pacchetti non dipende dal settore del progetto: quello dell'anonimizzazione dipende da chi può leggere il repository e da chi appartengono i dati documentati, due condizioni che valgono insieme e che nessuna valutazione sulla dimensione della base di codice tocca. Un rifiuto in blocco al gate copre quindi in silenzio anche i pacchetti il cui trigger è soddisfatto, e dopo non se ne accorge nessun controllo. Misurato il 2026-10-28: un repository pubblico che documentava centoundici caselle di colleghi aveva liquidato l'intero catalogo con un giudizio sulla dimensione del codice. Ne segue che un rifiuto in blocco si registra pacchetto per pacchetto per quelli a trigger indipendente, e che quei pacchetti si riesaminano ogni volta che cambia la visibilità del repository o la natura dei dati documentati, non una volta sola all'inizializzazione.
+
 ## Passo 3 - Attraversare un settore per volta
 
 Per ciascun settore riconosciuto si apre la sezione corrispondente del catalogo, si legge la frase che spiega a chi quel settore serve, e la si riporta all'utente prima delle righe: è quella frase a dire perché le domande che seguono hanno senso.
@@ -83,6 +87,10 @@ I pacchetti di tipo MCP server compaiono in più settori, ma il loro vincolo è 
 Ne segue una conseguenza operativa per questa skill: il conteggio si tiene attraverso i settori e non dentro ciascuno, e quando il tetto è raggiunto lo si dice, invece di proporre il settimo server e lasciare che sia l'utente ad accorgersene. Si preferisce sempre l'implementazione ufficiale del vendor rispetto a un fork community non verificato, e i server che recuperano contenuto web o documenti esterni si esaminano prima di concedere loro permessi di scrittura, perché sono vettori di prompt injection.
 
 ## Passo 6 - Chiudere dichiarando che cosa è cambiato
+
+Ogni scelta si registra anche in `.claude/pacchetti.json`, con `versione: 1` e una mappa `pacchetti`: per ciascun nome si scrivono `stato` (`adottato`, `rifiutato` o `rimandato`), data e motivo. Per un pacchetto adottato si conserva l'elenco `file`, con coppie `origine` relativa al template e `destinazione` relativa al progetto; una destinazione sotto `.claude/templates/` è soltanto un modello e non conta come istanza. Il registro non contiene valori privati, credenziali o percorsi di altre macchine. Le ricette comuni pubblicate in `.claude/templates/pacchetti-istanza.json` evitano di ripetere l'elenco, ma non sostituiscono la decisione del proprietario.
+
+Prima di dichiarare concluso il gate eseguire `python .claude/templates/tools/verifica-pacchetti.py --progetto . --template .`: distingue adozione, presenza dei file, configurazione privata e richiamo ai controlli. Una configurazione presente non equivale a un controllo collaudato. Registri assenti restano scelte non censite; non si trasformano in rifiuti o autorizzazioni dedotte. `allinea` ripristina i file mancanti dei pacchetti dichiarati adottati usando lo stesso confronto e gli stessi conflitti degli altri file, e riporta il lavoro di istanziazione ancora aperto oltre al risultato della propagazione.
 
 Alla fine si consegna un riepilogo in quattro righe: quali settori sono stati attraversati, quali pacchetti sono stati attivati con che cosa hanno istanziato, quali sono stati rifiutati o rimandati, e quali file il gate ha scritto. L'ultima riga è il presidio della regola per cui ciò che si dice in sessione si scrive anche su disco, e se manca vuol dire che il gate è rimasto in chat.
 

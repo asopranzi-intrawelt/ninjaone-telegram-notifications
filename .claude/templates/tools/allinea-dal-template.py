@@ -96,6 +96,7 @@ import collections
 import difflib
 import hashlib
 import json
+import importlib.util
 import subprocess
 import sys
 import tempfile
@@ -389,6 +390,16 @@ FILE_RISOLTI = ".claude/allineamento-risolti.json"
 RISOLTI: dict[str, dict] = {}
 
 
+def firma_risoluzione(dati):
+    """La firma del contenuto fuso è indipendente dalle fini riga del checkout."""
+    return hashlib.sha256(lf(dati)).hexdigest()
+
+
+def risoluzione_valida(percorso, testa_oid, dati):
+    voce = RISOLTI.get(percorso, {})
+    return voce.get("testa") == testa_oid and voce.get("locale_sha256_lf") == firma_risoluzione(dati)
+
+
 def innesco(template: Path, prj: Path, skill: list[str]) -> tuple[bytes | None, list[str], str]:
     """Il CLAUDE.md del progetto con le righe di innesco mancanti, e quali sono.
 
@@ -561,7 +572,7 @@ def main():
                 voce["esito"] = "UGUALE"
             elif blob_id(loc) in storici:
                 voce["esito"], voce["_dati"] = "VECCHIO", t
-            elif RISOLTI.get(dest_rel, {}).get("testa") == testa[tpl_rel]:
+            elif risoluzione_valida(dest_rel, testa[tpl_rel], loc):
                 # risolto a mano contro questa stessa testa: finché il template non
                 # cambia di nuovo il file non c'è niente di nuovo da decidere
                 voce["esito"] = "ADATTATO"
@@ -615,7 +626,7 @@ def main():
             voce = {"file": p, "template": dst}
             if blob_id(loc) in storici:
                 voce["esito"], voce["_dati"] = "SPOSTATO", t
-            elif RISOLTI.get(p, {}).get("testa") == testa[dst]:
+            elif risoluzione_valida(p, testa[dst], loc):
                 # Stessa regola del passo 1: risolto a mano contro questa stessa testa, non
                 # c'e' niente di nuovo da decidere. Mancava qui, e una risoluzione registrata
                 # su un file che il template ha rinominato veniva scritta e poi mai guardata:
@@ -777,13 +788,42 @@ def main():
             if any(r.startswith(MARCATORI[0]) or r.startswith(MARCATORI[3]) for r in f.read_text(encoding="utf-8", errors="replace").splitlines()):
                 print(f"errore: --risolto {p}: il file contiene ancora marcatori di conflitto", file=sys.stderr)
                 sys.exit(2)
-            RISOLTI[p] = {"testa": testa[voce["template"]], "il": oggi}
-            if voce["esito"] == "CONFLITTO":
-                voce["esito"], voce["nota"] = "ADATTATO", f"risolto a mano il {oggi}, registrato ora"
-                voce.pop("_dati_conflitto", None)
+            RISOLTI[p] = {"testa": testa[voce["template"]], "il": oggi,
+                          "locale_sha256_lf": firma_risoluzione(f.read_bytes())}
+            voce["esito"], voce["nota"] = "RISOLTO", f"risolto a mano il {oggi}; contenuto firmato e incluso nel perimetro"
+            voce["_dati"] = f.read_bytes()
+            voce.pop("_dati_conflitto", None)
         f_risolti.parent.mkdir(parents=True, exist_ok=True)
         f_risolti.write_text(json.dumps(dict(sorted(RISOLTI.items())), ensure_ascii=False, indent=2) + "\n",
                              encoding="utf-8", newline="\n")
+        esiti.append({"file": FILE_RISOLTI, "esito": "VECCHIO", "_dati": f_risolti.read_bytes(),
+                      "nota": "registro e contenuti fusi appartengono allo stesso perimetro"})
+
+    # Le scelte del gate hanno un contratto di istanza: una copia nel magazzino
+    # non sostituisce i file che il progetto ha deciso di usare.
+    helper_pac = Path(__file__).with_name("verifica-pacchetti.py")
+    if not helper_pac.is_file():
+        helper_pac = tpl / ".claude/templates/tools/verifica-pacchetti.py"
+    spec_pac = importlib.util.spec_from_file_location("verifica_pacchetti", helper_pac)
+    pacchetti = importlib.util.module_from_spec(spec_pac)
+    spec_pac.loader.exec_module(pacchetti)
+    ricette = json.loads(leggi_blob(tpl, testa[pacchetti.RICETTE])) if pacchetti.RICETTE in testa else {}
+    catalogo_rel = ".claude/templates/PACKAGES.md"
+    catalogo = leggi_blob(tpl, testa[catalogo_rel]).decode("utf-8") if catalogo_rel in testa else ""
+    for nome, origine, destinazione in pacchetti.piano(prj, ricette, testa):
+        precedenti = [e for e in esiti if e["file"] == destinazione]
+        if any(e.get("template") not in (None, origine) for e in precedenti):
+            raise ValueError("destinazione del pacchetto già gestita da un'altra origine: " + destinazione)
+        if not precedenti or any(e.get("template") is None for e in precedenti):
+            esiti[:] = [e for e in esiti if e["file"] != destinazione]
+            valuta(destinazione, origine, blob.get(origine, set()))
+
+    # 6b. il ponte Codex appartiene al rapporto della passata, anche nei progetti
+    # gia' istanziati: i soli wrapper possono essere allineati mentre nessuno
+    # dice a Codex di leggere CLAUDE.md. Non si adotta Codex nei progetti solo Claude.
+    ponte_codex = ".claude/templates/AGENTS.md"
+    if ((prj / ".agents" / "skills").is_dir() or (prj / "AGENTS.md").is_file()) and ponte_codex in testa:
+        valuta("AGENTS.md", ponte_codex, blob.get(ponte_codex, set()))
 
     # 7. righe di innesco nel CLAUDE.md, fuori dal perimetro dei file e quindi solo su richiesta
     if a.innesco:
@@ -808,12 +848,27 @@ def main():
             esiti.append({"file": nome, "template": ".claude/templates/CLAUDE.md", "esito": "INNESCO",
                           "skill": mancanti, "nota": f"righe per {', '.join(mancanti)}, {dove}", "_dati": dati})
 
+    # La ricevuta appartiene al rapporto: chiudi-allineamento la versiona con i
+    # soli file consegnati; non costituisce una promessa di risoluzione dei conflitti.
+    spec = importlib.util.spec_from_file_location("stato_template", Path(__file__).with_name("stato-template.py"))
+    stato_template = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(stato_template)
+    effettivi = [e for e in esiti if e["esito"] != "RIMOSSO" or a.rimuovi]
+    consegna = stato_template.ricevuta(effettivi, stato_template.git(tpl, "rev-parse", "HEAD"))
+    if consegna:
+        relativo = ".claude/ultimo-allineamento.md"
+        dest = prj / relativo
+        if dest.is_file() and "<!-- generato da allinea-dal-template.py -->" not in dest.read_text(encoding="utf-8-sig"):
+            esiti.append({"file": relativo, "esito": "CONFLITTO", "nota": "ricevuta locale non generata: non sovrascritta"})
+        else:
+            esiti.append({"file": relativo, "esito": "VECCHIO" if dest.is_file() else "NUOVO", "_dati": consegna.encode("utf-8")})
+
     # applicazione
     if a.applica:
         for e in esiti:
             if e["esito"] == "INNESCO":
                 (prj / e["file"]).write_bytes(e["_dati"])
-            elif e["esito"] in ("NUOVO", "VECCHIO", "SUPERATO", "MERGE"):
+            elif e["esito"] in ("NUOVO", "VECCHIO", "SUPERATO", "MERGE", "RISOLTO"):
                 scrivi(prj / e["file"], e["_dati"])
             elif e["esito"] == "SPOSTATO":
                 scrivi(prj / e["template"], e["_dati"])
@@ -829,8 +884,16 @@ def main():
                 dove = f"esito del merge in {out.relative_to(prj).as_posix()}"
                 e["nota"] = f"{e['nota']}; {dove}" if e.get("nota") else dove
 
+    stato_pacchetti = pacchetti.audit(prj, ricette, catalogo)
+    if stato_pacchetti:
+        non_censiti = sum(p["decisione"] == "non-censito" for p in stato_pacchetti)
+        incompleti = sum(p["decisione"] == "adottato" and p["istanza"] != "completo" for p in stato_pacchetti)
+        anon = next((p for p in stato_pacchetti if p["pacchetto"] == "anonymization"), {})
+        esiti.append({"file": pacchetti.REGISTRO, "esito": "PACCHETTI", "pacchetti": stato_pacchetti,
+                      "nota": f"{non_censiti} scelte non censite; {incompleti} istanze adottate incomplete; anonymization: {anon.get('istanza', 'non-verificabile')}, {anon.get('configurazione', 'non-verificabile')}. Modelli distribuiti e pacchetti attivi sono stati distinti."})
+
     # rapporto
-    ordine = ["CONFLITTO", "SUPERATO", "MERGE", "SPOSTATO", "RIMOSSO", "SCOLLEGATO", "VECCHIO", "NUOVO", "INNESCO", "ADATTATO", "LOCALE", "UGUALE"]
+    ordine = ["CONFLITTO", "SUPERATO", "MERGE", "RISOLTO", "SPOSTATO", "RIMOSSO", "SCOLLEGATO", "VECCHIO", "NUOVO", "INNESCO", "PACCHETTI", "ADATTATO", "LOCALE", "UGUALE"]
     conta = {k: sum(1 for e in esiti if e["esito"] == k) for k in ordine}
     for k in ordine:
         if k in ("UGUALE", "ADATTATO", "LOCALE"):

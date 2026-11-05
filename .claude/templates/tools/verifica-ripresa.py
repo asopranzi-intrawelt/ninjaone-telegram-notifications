@@ -61,6 +61,8 @@ oppure attraverso i wrapper di hooks-starter, che leggono il codice e tornano se
 """
 
 import argparse
+import importlib.util
+from pathlib import Path
 import hashlib
 import io
 import os
@@ -232,7 +234,7 @@ def commit_dichiarato(percorso):
         return None
     with io.open(percorso, encoding="utf-8", errors="replace") as f:
         testa = "".join(next(f, "") for _ in range(RIGHE_INTESTAZIONE))
-    m = re.search(r"(?:Commit di riferimento|last-verified-commit|generated-from-commit)\s*:?\s*"
+    m = re.search(r"(?:Commit di riferimento|last-verified(?:-commit)?|generated-from-commit)\s*:?\s*"
                   r"([0-9a-f]{7,40}|PENDING-FIRST-COMMIT)", testa)
     return m.group(1) if m else None
 
@@ -291,7 +293,7 @@ def schede_indietro(radice=None):
         if not h or h == "PENDING-FIRST-COMMIT":
             continue
         try:
-            git("cat-file", "-e", h + "^{commit}", radice=radice)
+            git("merge-base", "--is-ancestor", h, "HEAD", radice=radice)
         except Errore:
             fuori.append((nome, h))
     return fuori
@@ -429,7 +431,7 @@ def confronta(radice=None):
     for nome, h in schede_indietro(radice=radice):
         divergenze.append(
             "la scheda context/" + nome + " è ancorata al commit " + h + ", che in questo "
-            "repository non esiste: viene da un altro ramo, o da una storia riscritta.")
+            "repository non esiste o non è antenato di HEAD: viene da un altro ramo, o da una storia riscritta.")
 
     # Gli altri alberi di lavoro: la memoria di questo albero può essere la verità di un'altra
     # branch, ed è la sola divergenza che nessun file di questo albero può rivelare.
@@ -677,6 +679,21 @@ def main():
 
     if a.hook:
         a.breve = True
+
+    if not a.registra:
+        base = Path(a.radice or ".").resolve()
+        candidati = [Path(__file__).with_name("stato-template.py"), base / ".claude/templates/tools/stato-template.py"]
+        helper = next((p for p in candidati if p.is_file()), None)
+        if helper:
+            try:
+                spec = importlib.util.spec_from_file_location("stato_template", helper)
+                modulo = importlib.util.module_from_spec(spec)
+                spec.loader.exec_module(modulo)
+                print(modulo.stato(base)["messaggio"])
+                if (base / ".claude/ultimo-allineamento.md").is_file():
+                    print("Ultima consegna: leggere .claude/ultimo-allineamento.md")
+            except Exception as exc:
+                print("template: confronto non eseguito (%s)" % type(exc).__name__)
 
     try:
         if a.registra:

@@ -38,11 +38,15 @@ I due si usano insieme e coprono categorie diverse: uno cerca credenziali per fo
 
 Chi adotta entrambi tenga presente anche il caveat che `secret-scan` dichiara di suo: i commit *manuali* dell'utente non passano da un hook `PreToolUse`, che intercetta le azioni dell'agente. Per coprirli serve un hook nativo di git via `core.hooksPath`, ed è il posto in cui conviene registrare anche il controllo di questo pacchetto se il progetto vuole una difesa che non dipenda da chi si ricorda di lanciarlo.
 
+## Il controllo si esegue anche nel template, non solo nei progetti
+
+I valori da anonimizzare possono vivere nel template invece che nel progetto, ed è il caso più costoso da scoprire tardi. Misurato il 2026-10-28 in un progetto istanziato: dei cinque file tracciati che nominavano due piattaforme, quattro stavano sotto `.claude/templates/`, cioè arrivavano dall'allineamento e sarebbero tornati identici alla passata successiva. Un nome proprio, di progetto o di persona, finito in un documento del template si propaga a ogni progetto istanziato e si moltiplica per il numero di repository pubblici che ne discendono. Ne seguono due cose: il controllo va eseguito anche sul template, con il suo file di pattern privato, e una bonifica fatta in un progetto istanziato su file che provengono dal template è lavoro perso finché non si corregge la fonte.
+
 ## Cosa istanzia, e dove
 
 Nel progetto vanno tre cose, e la terza è quella che si dimentica.
 
-Lo strumento `tools/Test-Anonymization.py` va in `tools/`, oppure in `scripts/` se il progetto usa quella convenzione. La regola `rules/anonymization.md` va in `.claude/rules/anonymization.md`, sostituendo i segnaposto tra parentesi angolari, e va dichiarata fra le regole da caricare sempre nel `CLAUDE.md` del progetto: senza il criterio, lo strumento è un elenco di riscontri che nessuno sa come giudicare.
+Lo strumento `tools/Test-Anonymization.py` va in `tools/`, oppure in `scripts/` se il progetto usa quella convenzione. La regola `rules/anonymization.md` va in `.claude/rules/anonymization.md`, sostituendo i segnaposto tra parentesi angolari, e va dichiarata fra le regole da caricare sempre nel `CLAUDE.md` del progetto. La norma `norme/anonymization.md`, che raccoglie i casi osservati, va in `.claude/norme/anonymization.md` e non si carica all'avvio: senza il criterio, lo strumento è un elenco di riscontri che nessuno sa come giudicare.
 
 Il terzo file è quello che non si versiona. Si copia `patterns.example.json` nel layer privato del progetto, per default `_notes/.anonymization-patterns.json`, e si sostituisce ogni valore con quelli veri. Va verificato che il percorso sia effettivamente ignorato da git prima di scrivervi dentro il primo valore reale, e non dopo: è l'unico passo dell'istanziazione in cui un errore si paga con la storia git.
 
@@ -55,6 +59,8 @@ Quando il repository è pubblico, o è condiviso più largamente di chi lo scriv
 Non si propone per un repository che documenta soltanto codice proprio: là non c'è nulla da anonimizzare e lo strumento produrrebbe solo falsi positivi. Si propone invece anche per un repository *privato* che documenta l'infrastruttura di un cliente, perché la cerchia di chi vi accede cambia nel tempo mentre la storia git no.
 
 ## Portabilità
+
+Le voci `nomi_propri` si cercano senza distinzione fra maiuscole e minuscole come token completi: una voce breve non deve corrispondere all'interno di una parola o di un identificatore diverso. Questo evita che parole come «removing» vengano scambiate per nomi. Per valori identificanti da riconoscere anche dentro stringhe più lunghe si usa invece `segreti_letterali`, che mantiene il confronto letterale sensibile alle maiuscole. Le eccezioni di contesto dei nomi restano esplicite nel file privato dei pattern.
 
 Lo strumento è eseguibile da *qualunque cartella* e su Windows come su Linux: risale alla radice del repository dalla posizione del proprio file, cercando `.git` sia come cartella sia come file perché in un worktree o in un sottomodulo è un file che punta altrove. Non dipende dalla cartella corrente, e la ragione è che la cartella corrente dipende da chi invoca: una sessione interattiva, un hook, un'attività pianificata e un altro script sono quattro cartelle diverse per lo stesso comando. La prima versione si rifiutava di partire se non la si lanciava dalla radice, che è precisamente il vincolo che rende uno strumento inutilizzabile dentro un'automazione.
 

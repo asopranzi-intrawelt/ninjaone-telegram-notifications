@@ -56,7 +56,7 @@ Esiti per progetto:
   allineato            niente da fare rispetto al commit corrente del template
   incompleto           scritto, ma la seconda misura trova ancora file da trattare
   fuori-perimetro      scritto, ma e cambiato un file fuori da .claude/, tools/,
-                       docs/, .githooks/pre-commit.d/ e CLAUDE.md: niente si annulla da
+                       docs/, .githooks/pre-commit.d/, CLAUDE.md e AGENTS.md: niente si annulla da
                        solo, decide la persona
 
 Solo a verifica passata si scrive nel progetto .claude/allineamento-template.json,
@@ -197,7 +197,7 @@ $fileComuni = Join-Path $dirCorsa 'righe-comuni.json'
 
 function Log([string]$riga) { Write-Host $riga; [System.IO.File]::AppendAllText($fileLog, $riga + "`r`n", $utf8) }
 
-$AZIONABILI = 'CONFLITTO', 'SUPERATO', 'MERGE', 'VECCHIO', 'NUOVO', 'SPOSTATO', 'RIMOSSO', 'INNESCO'
+$AZIONABILI = 'CONFLITTO', 'SUPERATO', 'MERGE', 'RISOLTO', 'VECCHIO', 'NUOVO', 'SPOSTATO', 'RIMOSSO', 'INNESCO'
 function Leggi-Json([string]$f) { Get-Content -LiteralPath $f -Raw -Encoding UTF8 | ConvertFrom-Json }
 function Conta($esiti) {
   $c = @{}; foreach ($k in $AZIONABILI + 'ADATTATO', 'LOCALE', 'UGUALE') { $c[$k] = 0 }
@@ -514,7 +514,17 @@ try {
     $prj = $p.percorso
     $o = [pscustomobject]@{ nome = $p.nome; percorso = $prj; slug = ($prj -replace '[:\\/]+', '--').Trim('-'); stato = $null; sporco = $false; sporchi = @(); c = $null; avvisi = @() }
     $escl = In-Elenco $esclusi $prj
-    if ($escl) { $o.stato = 'escluso'; $o.avvisi += 'escluso: ' + $escl }
+    if ($escl) {
+      $o.stato = 'escluso'; $o.avvisi += 'escluso: ' + $escl
+      $ancoraEscluso = ''
+      if (Esiste $prj '.claude/allineamento-template.json' 'file') {
+        try { $ancoraEscluso = ((Leggi-Testo $prj '.claude/allineamento-template.json') | ConvertFrom-Json).template_commit } catch {}
+      }
+      $statoArgs = @((Join-Path $PSScriptRoot 'stato-template.py'), '--progetto', $prj, '--template', $tpl, '--esclusione', $escl)
+      if ($ancoraEscluso) { $statoArgs += '--ancora', $ancoraEscluso }
+      $statoEscluso = @(& python @statoArgs 2>&1)
+      $o.avvisi += ($statoEscluso -join ' ')
+    }
     elseif ((Test-Remoto $prj) -and -not (In-Elenco $approvati $prj)) { $o.stato = 'da-confermare' }
     elseif (-not (Esiste $prj '.git')) { $o.stato = 'non-git' }
     elseif ((Esiste $prj '.git' 'file') -and -not $IncludiAlberi) { $o.stato = 'albero-secondario' }
@@ -569,6 +579,9 @@ try {
         # Il rapporto si legge una volta sola e si conserva: la passata di scrittura riscrive
         # lo stesso file, quindi dopo non si saprebbe piu' quali strumenti sono stati toccati.
         $esitiPrima = Leggi-Json $json
+        foreach ($statoPac in @($esitiPrima | Where-Object { $_.esito -eq 'PACCHETTI' })) {
+          $o.avvisi += 'istanze dei pacchetti: ' + $statoPac.nota
+        }
         $o.c = Conta $esitiPrima
         $o.stato = if ($o.c.azionabili -eq 0) { 'allineato' } elseif ($o.c.CONFLITTO -gt 0) { 'conflitti' } else { 'da-allineare' }
         $collisi = @()
@@ -596,7 +609,7 @@ try {
           # progetto. Lo strumento e' quello del template, che arriva in ogni progetto.
           # Solo dove gli adattatori esistono gia': la prima corsa del 2026-10-20 li lanciava ovunque e
           # ha creato da zero .agents/ in ventotto progetti che non avevano mai scelto Codex.
-          if ($codice -lt 2 -and (Esiste $prj '.agents/skills' 'cartella')) {
+          if ($codice -lt 2 -and ((Esiste $prj '.agents/skills' 'cartella') -or (Esiste $prj 'AGENTS.md' 'file'))) {
             if (Test-Remoto $prj) {
               $r = Dividi-Remoto $prj
               $null = Esegui-Ssh $r.alias ('python3 ' + (Q "$($tplRemoti[$r.alias])/.claude/templates/tools/sync-codex-skills.py") + ' --project-root ' + (Q $r.percorso) + ' >/dev/null 2>&1')
@@ -609,7 +622,7 @@ try {
           # senza questa sottrazione un progetto con lavoro in corso fuori dal perimetro
           # verrebbe marcato fuori-perimetro per modifiche che non ha fatto l'allineamento.
           $fuori = @((Sporchi $prj) | Where-Object { $o.sporchi -notcontains $_ } |
-            Where-Object { $_ -notmatch '^(\.claude|\.agents|tools|docs|\.githooks/pre-commit\.d)/' -and $_ -ne 'CLAUDE.md' })
+            Where-Object { $_ -notmatch '^(\.claude|\.agents|tools|docs|\.githooks/pre-commit\.d)/' -and $_ -notin @('CLAUDE.md', 'AGENTS.md') })
           if ($codice -ge 2 -or $codice2 -ge 2 -or -not (Test-Path -LiteralPath $json2)) { $o.stato = 'errore-strumento' }
           else {
             $c2 = Conta (Leggi-Json $json2)
@@ -671,13 +684,42 @@ try {
       }
     }
     $sintesi = if ($o.c) { ($AZIONABILI + 'ADATTATO' | Where-Object { $o.c[$_] } | ForEach-Object { "$_=$($o.c[$_])" }) -join ' ' } else { '' }
-    Log ('{0,-44} {1,-20} {2}' -f $o.nome, $o.stato, $sintesi)
+    $statoVisibile = switch ($o.stato) { 'allineato' { 'file-allineati' } 'applicato' { 'file-applicati' } default { $o.stato } }
+    Log ('{0,-44} {1,-20} {2}' -f $o.nome, $statoVisibile, $sintesi)
     foreach ($a in $o.avvisi) { Log ('{0,-44} {1}' -f '', "avviso: $a") }
     $registro[$prj] = [ordered]@{
       stato = $o.stato; misurato_il = (Get-Date -Format 's'); template_commit = $tplHead; template_albero_claude = $tplAlbero
       conteggi = $o.c; avvisi = $o.avvisi; rapporto = (Join-Path $dirCorsa "$($o.slug).json")
+      perimetro_stato = 'file gestiti dal template; istanze, configurazione e collaudo sono verifiche distinte'
     }
   }
+
+  # La conformita del sistema di progetto non qualifica runtime e dipendenze.
+  # Si legge solo un rapporto locale: nessun audit di rete o patch nella passata.
+  $guardiaSicurezza = Join-Path $PSScriptRoot 'stato-vulnerabilita.py'
+  Log ''
+  Log 'Sicurezza dei progetti: stato distinto dall allineamento del template'
+  foreach ($o in $progetti) {
+    $sicurezza = [ordered]@{ stato = 'non_verificato'; motivi = @('rapporto_non_letto'); rilievi_aperti = @() }
+    if (Test-Remoto $o.percorso) {
+      $sicurezza.motivi = @('eseguire_il_controllo_sull_host_approvato')
+    } elseif ($o.stato -in @('clone-del-template', 'albero-secondario', 'escluso')) {
+      $sicurezza.motivi = @('fuori_perimetro_di_questa_passata')
+    } elseif (Test-Path -LiteralPath $guardiaSicurezza) {
+      try {
+        $rawSicurezza = & python $guardiaSicurezza --radice $o.percorso --json 2>$null
+        $lettaSicurezza = $rawSicurezza | ConvertFrom-Json -ErrorAction Stop
+        if (-not $lettaSicurezza.stato) { throw 'verdetto assente' }
+        $sicurezza = $lettaSicurezza
+      } catch {
+        $sicurezza.stato = 'non_verificabile'
+        $sicurezza.motivi = @('errore_lettura_del_rapporto')
+      }
+    }
+    $registro[$o.percorso]['sicurezza'] = $sicurezza
+    Log ('  {0}: {1}; rilievi aperti={2}' -f $o.percorso, $sicurezza.stato, @($sicurezza.rilievi_aperti).Count)
+  }
+  Log 'Il codice di uscita della passata riguarda l allineamento; i verdetti di sicurezza sono separati nel registro.'
 
   # --- sintesi ----------------------------------------------------------------
   [System.IO.File]::WriteAllText($fileRegistro, ($registro | ConvertTo-Json -Depth 5), $utf8)

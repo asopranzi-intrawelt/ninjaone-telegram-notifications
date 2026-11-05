@@ -84,9 +84,24 @@ function Esci-Guardia([string]$m) { Write-Host "GUARDIA: $m"; exit 2 }
 # version control e non quello di questa postazione.
 . (Join-Path $PSScriptRoot 'trasporto-ssh.ps1')
 
-$ESITI_SCRITTI = @('NUOVO', 'VECCHIO', 'SUPERATO', 'MERGE', 'INNESCO')
+$ESITI_SCRITTI = @('NUOVO', 'VECCHIO', 'SUPERATO', 'MERGE', 'RISOLTO', 'INNESCO')
 $MARCATORE = '.claude/allineamento-template.json'
 $RISOLTI = '.claude/allineamento-risolti.json'
+
+function Verifica-Risoluzioni([string]$prj) {
+  $registrato = @(Invoca-Git $prj diff --cached --name-only -- $RISOLTI)
+  if (-not ($registrato -contains $RISOLTI)) { return $true }
+  if (Test-Remoto $prj) {
+    $rem = Dividi-Remoto $prj
+    $comando = 'python3 ' + (Q "$($rem.percorso)/.claude/templates/tools/verifica-milestone.py") + ' --radice ' + (Q $rem.percorso) + ' --stage-risoluzioni'
+    Esegui-Ssh $rem.alias $comando | ForEach-Object { Write-Host $_ }
+    return ($LASTEXITCODE -eq 0)
+  }
+  $helper = Join-Path $prj '.claude/templates/tools/verifica-milestone.py'
+  if (-not (Test-Path -LiteralPath $helper)) { $helper = Join-Path $PSScriptRoot 'verifica-milestone.py' }
+  & python $helper --radice $prj --stage-risoluzioni | ForEach-Object { Write-Host $_ }
+  return ($LASTEXITCODE -eq 0)
+}
 
 # I percorsi che la passata ha toccato, letti dal suo rapporto e non indovinati
 # dall'albero: e' questa la differenza fra un commit dell'allineamento e un
@@ -136,7 +151,9 @@ function Percorsi-Corse([string]$prj, [string]$rapporto) {
   # commit del progetto: un'altra sessione che committa il proprio lavoro dopo una corsa non
   # rende committato cio' che la corsa aveva scritto.
   $dataHead = @(Invoca-Git $prj log -1 --format=%cd --date=format:%Y%m%d-%H%M%S -- .claude/allineamento-template.json) | Select-Object -First 1
-  if (-not $dataHead -or -not (Test-Path -LiteralPath $cartella)) { return , $tutti }
+  if (-not (Test-Path -LiteralPath $cartella)) { return , $tutti }
+  # Al primo allineamento nessun marcatore e ancora versionato: valgono tutte le corse scritte.
+  if (-not $dataHead) { $dataHead = "" }
   foreach ($c in (Get-ChildItem -LiteralPath $cartella -Directory -ErrorAction SilentlyContinue)) {
     if ($c.Name -le $dataHead) { continue }
     if (-not (Test-Path -LiteralPath (Join-Path $c.FullName "$slug.dopo.json"))) { continue }
@@ -220,7 +237,7 @@ function Spingi-Altro([string]$prj, [string]$remoto, [bool]$applica, [int]$tenta
 function Chiudi-Progetto([string]$prj, [string]$rapporto, [string]$messaggio,
                          [bool]$applica, [int]$tentativi, [bool]$soloPush, [bool]$saltaPush, $azionePush, [string[]]$altriRemoti = @()) {
   $r = Chiudi-ProgettoUpstream $prj $rapporto $messaggio $applica $tentativi $soloPush $saltaPush $azionePush
-  if ($saltaPush -or -not $altriRemoti -or $r.esito -in @('cartella sparita', 'non e un repository', 'head staccato', 'rapporto mancante', 'git add fallito', 'commit rifiutato')) { return $r }
+  if ($saltaPush -or -not $altriRemoti -or $r.esito -in @('cartella sparita', 'non e un repository', 'head staccato', 'rapporto mancante', 'git add fallito', 'stage preesistente', 'risoluzione incoerente', 'commit rifiutato')) { return $r }
   $esiti = @($altriRemoti | ForEach-Object { Spingi-Altro $prj $_ $applica $tentativi })
   $r.push = (@($r.push) + $esiti) -join ', '
   return $r
@@ -238,6 +255,8 @@ function Chiudi-ProgettoUpstream([string]$prj, [string]$rapporto, [string]$messa
 
   if (-not $soloPush) {
     if (-not (Test-Path -LiteralPath $rapporto)) { $r.esito = 'rapporto mancante'; return $r }
+    $stagePresente = @(Invoca-Git $prj diff --cached --name-only)
+    if ($stagePresente.Count -gt 0) { $r.esito = 'stage preesistente'; return $r }
     $s = Smista $prj $rapporto
     $r.file = $s.miei.Count; $r.lasciati = $s.altrui.Count
     if ($s.miei.Count -gt 0) {
@@ -249,6 +268,7 @@ function Chiudi-ProgettoUpstream([string]$prj, [string]$rapporto, [string]$messa
           Invoca-Git $prj add -- @blocco | Out-Null
           if ($LASTEXITCODE -ne 0) { $r.esito = 'git add fallito'; return $r }
         }
+        if (-not (Verifica-Risoluzioni $prj)) { $r.esito = 'risoluzione incoerente'; return $r }
         Invoca-Git $prj commit -m $messaggio | Out-Null
         if ($LASTEXITCODE -ne 0) { $r.esito = 'commit rifiutato'; return $r }
         $r.commit = (Invoca-Git $prj rev-parse --short HEAD)
@@ -325,9 +345,40 @@ function Esegui-Autotest {
     $h = Nuovo-Repo 'risolti'
     Scrivi $h 'mio.md' "prima`n"; Scrivi $h '.claude/allineamento-risolti.json' "{}`n"
     & git -C $h add -A | Out-Null; & git -C $h commit -q -m 'base' | Out-Null
-    Scrivi $h '.claude/allineamento-risolti.json' "{`"tools/x.py`": `"abc`"}`n"
+    $hashPrima = [BitConverter]::ToString([Security.Cryptography.SHA256]::Create().ComputeHash([Text.Encoding]::UTF8.GetBytes("prima`n"))).Replace('-', '').ToLowerInvariant()
+    Scrivi $h '.claude/allineamento-risolti.json' ((@{ 'mio.md' = @{ testa = 'abc'; locale_sha256_lf = $hashPrima } } | ConvertTo-Json) + "`n")
     $null = Chiudi-Progetto $h $rapA $MSG $true 1 $false $true $null
     Prova "il registro delle risoluzioni a mano entra nel commit" ((@(& git -C $h show --name-only --pretty=format: HEAD) -contains '.claude/allineamento-risolti.json'))
+
+    $fuso = Nuovo-Repo 'contenuto-fuso'
+    Scrivi $fuso 'mio.md' "prima`n"
+    & git -C $fuso add -A | Out-Null; & git -C $fuso commit -q -m 'base' | Out-Null
+    Scrivi $fuso 'mio.md' "fusione`n"
+    $hashFuso = [BitConverter]::ToString([Security.Cryptography.SHA256]::Create().ComputeHash([Text.Encoding]::UTF8.GetBytes("fusione`n"))).Replace('-', '').ToLowerInvariant()
+    Scrivi $fuso '.claude/allineamento-risolti.json' ((@{ 'mio.md' = @{ testa = 'abc'; locale_sha256_lf = $hashFuso } } | ConvertTo-Json) + "`n")
+    $rapFuso = Join-Path $radice 'fuso.json'
+    Scrivi $radice 'fuso.json' '[{"file":"mio.md","esito":"RISOLTO"}]'
+    $null = Chiudi-Progetto $fuso $rapFuso $MSG $true 1 $false $true $null
+    Prova "RISOLTO include nel commit il contenuto fuso" ((@(& git -C $fuso show --name-only --pretty=format: HEAD) -contains 'mio.md') -and ((& git -C $fuso show HEAD:mio.md) -eq 'fusione'))
+
+    $perso = Nuovo-Repo 'fusione-esclusa'
+    Scrivi $perso 'mio.md' "prima`n"
+    & git -C $perso add -A | Out-Null; & git -C $perso commit -q -m 'base' | Out-Null
+    $headPerso = (& git -C $perso rev-parse HEAD)
+    Scrivi $perso 'mio.md' "fusione`n"
+    Scrivi $perso '.claude/allineamento-risolti.json' ((@{ 'mio.md' = @{ testa = 'abc'; locale_sha256_lf = $hashFuso } } | ConvertTo-Json) + "`n")
+    $rapPerso = Join-Path $radice 'perso.json'
+    Scrivi $radice 'perso.json' '[{"file":"mio.md","esito":"ADATTATO"}]'
+    $risPerso = Chiudi-Progetto $perso $rapPerso $MSG $true 1 $false $true $null
+    Prova "il registro senza il file fuso blocca prima del commit" ($risPerso.esito -eq 'risoluzione incoerente' -and (& git -C $perso rev-parse HEAD) -eq $headPerso)
+
+    $staged = Nuovo-Repo 'stage-altrui'
+    Scrivi $staged 'mio.md' "prima`n"
+    & git -C $staged add -A | Out-Null; & git -C $staged commit -q -m 'base' | Out-Null
+    Scrivi $staged 'altrui.md' "locale`n"; & git -C $staged add altrui.md | Out-Null
+    Scrivi $staged 'mio.md' "dopo`n"
+    $risStage = Chiudi-Progetto $staged $rapA $MSG $true 1 $false $true $null
+    Prova "lo stage preesistente viene preservato" ($risStage.esito -eq 'stage preesistente' -and (@(& git -C $staged diff --cached --name-only) -contains 'altrui.md'))
 
     # 3c. l'adattatore Codex generato dalla passata entra nel commit
     $k = Nuovo-Repo 'adattatori'
@@ -365,6 +416,52 @@ function Esegui-Autotest {
     $dentroU = @(& git -C $u show --name-only --pretty=format: HEAD | Where-Object { $_ })
     Prova "una corsa precedente che ha scritto dopo l'ultimo allineamento entra nel commit" ($dentroU -contains 'a.md' -and $dentroU -contains 'b.md')
     Prova "una corsa anteriore all'ultimo allineamento, o che ha solo misurato, resta fuori" (-not ($dentroU -contains 'c.md') -and -not ($dentroU -contains 'd.md') -and $rU.lasciati -eq 2)
+
+    # 3f. CLI reale dopo due passate, prima di versionare il primo marcatore.
+    $ripetuto = Nuovo-Repo 'riallineato'
+    Scrivi $ripetuto 'mio.md' "prima`n"
+    & git -C $ripetuto add -A | Out-Null; & git -C $ripetuto commit -q -m 'base' | Out-Null
+    Scrivi $ripetuto 'mio.md' "dopo`n"; Scrivi $ripetuto 'altrui.md' "locale`n"
+    $tplProva = Join-Path $radice 'template-prova'
+    Scrivi $tplProva '.claude/PROJECT-SYSTEM.md' "prova`n"
+    $primaDir = Join-Path $tplProva '_notes/allineamento/corse/20200101-000000'
+    $dopoDir = Join-Path $tplProva '_notes/allineamento/corse/20200102-000000'
+    New-Item -ItemType Directory -Force -Path $primaDir, $dopoDir | Out-Null
+    $null = Rapporto (Join-Path $primaDir 'prj.json') @(@{file='mio.md';esito='VECCHIO'})
+    [IO.File]::WriteAllText((Join-Path $primaDir 'prj.dopo.json'),'[]',$utf8)
+    [IO.File]::WriteAllText((Join-Path $dopoDir 'prj.json'),'[]',$utf8)
+    $regProva = @{}
+    $regProva[$ripetuto] = @{stato='allineato';rapporto=(Join-Path $dopoDir 'prj.json');template_commit='abc1234';misurato_il=(Get-Date).ToString('s')}
+    $regProva[(Join-Path $radice 'escluso')] = @{stato='escluso';template_commit='abc1234'}
+    $regProva[(Join-Path $radice 'allineato-vecchio')] = @{stato='allineato';template_commit='abc1234';rapporto=(Join-Path $primaDir 'prj.json')}
+    [IO.File]::WriteAllText((Join-Path $tplProva '_notes/allineamento/registro.json'),(ConvertTo-Json $regProva -Depth 6),$utf8)
+    $cli = (& powershell -NoProfile -ExecutionPolicy Bypass -File $PSCommandPath -Template $tplProva -SaltaPush 2>&1 | Out-String)
+    Prova "la CLI include un progetto allineato con consegna precedente non committata" ($cli -match 'da committare' -and $cli -match 'file 1, lasciati 1')
+    Prova "la CLI lascia escluso il progetto escluso" ($cli -notmatch 'escluso\s+(da committare|cartella sparita)')
+    Prova "la CLI non riapre copie allineate assenti dall'ultima corsa" ($cli -notmatch 'allineato-vecchio\s+')
+    & git -C $ripetuto diff --cached --quiet
+    Prova "l'anteprima della CLI non mette file in stage" ($LASTEXITCODE -eq 0)
+
+    # 3g. Una tornata remota successiva non deve nascondere le consegne locali
+    # ancora non committate. Il caso 3f aveva un solo allineato nella coorte piu
+    # recente e lasciava verde proprio il filtro che perdeva le altre coorti.
+    $coorte = Nuovo-Repo 'ultima-coorte'
+    Scrivi $coorte 'secondo.md' "prima`n"
+    & git -C $coorte add -A | Out-Null; & git -C $coorte commit -q -m 'base' | Out-Null
+    Scrivi $coorte 'secondo.md' "dopo`n"
+    $terzaDir = Join-Path $tplProva '_notes/allineamento/corse/20200103-000000'
+    New-Item -ItemType Directory -Force -Path $terzaDir | Out-Null
+    $null = Rapporto (Join-Path $terzaDir 'seconda.json') @(@{file='secondo.md';esito='VECCHIO'})
+    $regProva[$coorte] = @{stato='allineato';rapporto=(Join-Path $terzaDir 'seconda.json');template_commit='abc1234';misurato_il=(Get-Date).ToString('s')}
+    $esclusoPolicy = Nuovo-Repo 'escluso-dalla-policy'
+    Scrivi $esclusoPolicy 'secondo.md' "locale`n"
+    $regProva[$esclusoPolicy] = @{stato='allineato';rapporto=(Join-Path $terzaDir 'seconda.json');template_commit='abc1234';misurato_il=(Get-Date).ToString('s')}
+    [IO.File]::WriteAllText((Join-Path $tplProva '_notes/allineamento/esclusi.txt'),($esclusoPolicy + " # scelta del proprietario`n"),$utf8)
+    [IO.File]::WriteAllText((Join-Path $tplProva '_notes/allineamento/registro.json'),(ConvertTo-Json $regProva -Depth 6),$utf8)
+    $cliCoorti = (& powershell -NoProfile -ExecutionPolicy Bypass -File $PSCommandPath -Template $tplProva -SaltaPush 2>&1 | Out-String)
+    Prova "la CLI include la consegna pendente di una coorte precedente" ($cliCoorti -match '(?m)^riallineato\s+da committare[^\r\n]*file 1, lasciati 1')
+    Prova "la CLI include anche la coorte piu recente" ($cliCoorti -match '(?m)^ultima-coorte\s+da committare[^\r\n]*file 1, lasciati 0')
+    Prova "la CLI rispetta esclusi.txt anche con una consegna pendente" ($cliCoorti -notmatch '(?m)^escluso-dalla-policy\s+')
 
     # 4. un albero senza niente da committare non produce un commit vuoto
     $b = Nuovo-Repo 'pulito'
@@ -507,17 +604,26 @@ if (-not (Test-Path -LiteralPath $fileRegistro)) { Esci-Guardia "registro assent
 $registro = @{}
 try { (Get-Content -LiteralPath $fileRegistro -Raw -Encoding UTF8 | ConvertFrom-Json).PSObject.Properties | ForEach-Object { $registro[$_.Name] = $_.Value } }
 catch { Esci-Guardia 'registro illeggibile' }
+$esclusioni = Leggi-Elenco (Join-Path $Template '_notes/allineamento/esclusi.txt')
 
+# I vecchi allineato del registro possono riferirsi a copie non piu presenti.
+$ultimaCorsa = @($registro.Values | Where-Object { $_.stato -in @('applicato', 'allineato') -and $_.rapporto } | ForEach-Object { Split-Path $_.rapporto -Parent } | Sort-Object | Select-Object -Last 1)
 $voci = @()
 foreach ($k in ($registro.Keys | Sort-Object)) {
   $v = $registro[$k]
-  if ($v.stato -ne 'applicato') { continue }
+  if ($v.stato -notin @('applicato', 'allineato')) { continue }
+  if (In-Elenco $esclusioni $k) { continue }
+  if ($v.stato -eq 'allineato' -and (Split-Path $v.rapporto -Parent) -ne $ultimaCorsa[0]) {
+    if (-not (Esiste $k '' 'cartella') -or -not (Test-Path -LiteralPath $v.rapporto)) { continue }
+    $daChiudere = Smista $k $v.rapporto
+    if ($daChiudere.miei.Count -eq 0) { continue }
+  }
   $nome = Nome-Progetto $k
   if ($Solo -and -not ($Solo | Where-Object { $nome -like "*$_*" })) { continue }
   if ($Escludi | Where-Object { $nome -like "*$_*" }) { continue }
   $voci += [pscustomobject]@{ percorso = $k; nome = $nome; rapporto = $v.rapporto; commit = $v.template_commit; misurato = $v.misurato_il }
 }
-if (-not $voci) { Write-Host 'nessun progetto in stato applicato nel registro: niente da chiudere'; exit 0 }
+if (-not $voci) { Write-Host 'nessun progetto applicato o allineato nel registro: niente da chiudere'; exit 0 }
 
 $msg = $Messaggio
 if (-not $msg) { $msg = Messaggio-Predefinito ($voci[0].commit) }
@@ -528,7 +634,7 @@ if ($Applica) { $modo = 'applica' }
 $cosa = 'commit e push'
 if ($SoloPush) { $cosa = 'solo push' }
 if ($SaltaPush) { $cosa = 'solo commit' }
-Write-Host ("template {0}  registro {1} progetti applicati" -f $Template, $voci.Count)
+Write-Host ("template {0}  registro {1} progetti applicati o allineati" -f $Template, $voci.Count)
 Write-Host ("modo: {0}   {1}   messaggio: {2}" -f $modo, $cosa, $msg)
 
 # Lo stage si fonda su quali file la passata ha scritto, non su quali modifiche
@@ -559,7 +665,7 @@ foreach ($v in $voci) {
 }
 
 Write-Host ''
-$falliti = @($esiti | Where-Object { $_.push -match 'push fallito' -or $_.esito -in @('commit rifiutato', 'git add fallito', 'rapporto mancante', 'non e un repository', 'head staccato', 'cartella sparita') })
+$falliti = @($esiti | Where-Object { $_.push -match 'push fallito' -or $_.esito -in @('stage preesistente', 'risoluzione incoerente', 'commit rifiutato', 'git add fallito', 'rapporto mancante', 'non e un repository', 'head staccato', 'cartella sparita') })
 $committati = @($esiti | Where-Object { $_.esito -eq 'committato' })
 $spinti = @($esiti | Where-Object { $_.push -match '^spinto' })
 Write-Host ("committati {0}, spinti {1}, da riprendere {2}" -f $committati.Count, $spinti.Count, $falliti.Count)
